@@ -980,7 +980,7 @@ pub fn path_to_vxml(path: String) -> Result(VXML, VXMLParsePathError) {
 
 fn jsx_text_escape(content: String) -> String {
   content
-  |> string.replace("&", "&amp;")
+  |> html_ampersand_escape_preserving_entities
   |> string.replace("{", "&#123;")
   |> string.replace("}", "&#125;")
   |> string.replace("<", "&lt;")

@@ -948,13 +948,13 @@ pub fn html_entity_normalization_rejects_bad_exceptions_test() {
   |> should.equal(Error(vxml.UnrecognizedHTMLEntityException("&chips;")))
 }
 
-pub fn jsx_output_escapes_text_without_preserving_entities_test() {
+pub fn jsx_output_preserves_entities_and_escapes_jsx_syntax_test() {
   let node =
     T(blame.no_blame, [
       Line(blame.no_blame, "&CounterClockwiseContourIntegral; {x} <y> & raw"),
     ])
   let expected =
-    "&amp;CounterClockwiseContourIntegral; &#123;x&#125; &lt;y&gt; &amp; raw"
+    "&CounterClockwiseContourIntegral; &#123;x&#125; &lt;y&gt; &amp; raw"
 
   node
   |> vxml.vxml_to_jsx(0, 2)
@@ -1027,4 +1027,43 @@ pub fn html_repair_combines_html_repairs_test() {
   "<img src=\"x\"><span>body</span class=\"old\">"
   |> vxml.html_repair
   |> should.equal("<img src=\"x\"/><span>body</span>")
+}
+
+pub fn jsx_and_html_agree_on_entity_escaping_test() {
+  list.each(
+    [
+      #("&nbsp; &amp; &lt; &quot;", "&nbsp; &amp; &lt; &quot;"),
+      #("&#8288;, &#x2060; &#X2060;", "&#8288;, &#x2060; &#X2060;"),
+      #(
+        "&chips; &#no; &#xZZ; &nbsp",
+        "&amp;chips; &amp;#no; &amp;#xZZ; &amp;nbsp",
+      ),
+      #("A & B &&", "A &amp; B &amp;&amp;"),
+      #("&amp;#8288;", "&amp;#8288;"),
+    ],
+    fn(pair) {
+      let node = T(blame.no_blame, [Line(blame.no_blame, pair.0)])
+      vxml.vxml_to_jsx(node, 0, 2) |> should.equal(pair.1)
+      vxml.vxml_to_html(node, 0, 2) |> should.equal(pair.1)
+    },
+  )
+}
+
+pub fn jsx_attributes_preserve_entities_without_exposing_syntax_test() {
+  V(
+    blame.no_blame,
+    "p",
+    [
+      Attr(
+        blame.no_blame,
+        "title",
+        "&nbsp; &#8288; &#x2060; &bad; & {x} \"<y>\"",
+      ),
+    ],
+    [],
+  )
+  |> vxml.vxml_to_jsx(0, 2)
+  |> should.equal(
+    "<p title=\"&nbsp; &#8288; &#x2060; &amp;bad; &amp; &#123;x&#125; &quot;&lt;y&gt;&quot;\" />",
+  )
 }

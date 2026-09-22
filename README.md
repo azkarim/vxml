@@ -360,10 +360,12 @@ let lines = vxml.vxml_to_jsx_output_lines(tree, 0, 2)
 let source = vxml.vxml_to_jsx(tree, 0, 2)
 ```
 
-The JSX serializer escapes `{`, `}`, `<`, `>`, and `&` in text without
-preserving HTML entity spellings. VXML text containing `&ensp;` therefore
-emits as `&amp;ensp;`. Quoted attribute values escape the same characters plus
-`"`. Attribute values exactly equal to `true`, `false`, or a decimal integer
+The JSX serializer preserves valid named and numeric HTML entities in text
+and quoted attributes, matching HTML output. Bare ampersands and unknown
+entity-like strings are escaped. For example, `&ensp;` stays `&ensp;`, while
+`&chips;` becomes `&amp;chips;`. JSX syntax characters `{`, `}`, `<`, and `>`
+are escaped, and quoted attributes also escape `"`.
+Attribute values exactly equal to `true`, `false`, or a decimal integer
 are emitted as JavaScript expression attributes, such as `enabled={true}` or
 `count={3}`. Other attribute values are emitted as double-quoted strings.
 
