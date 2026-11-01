@@ -26,6 +26,15 @@ also includes the subsequent release commits `0036585` and `34dd8c6`.
   every module importing `vxml`. The new module returns identical results for
   all 2,125 named entities and for numeric references
   (`scripts/generate_html_entities.py` regenerates it).
+- Fix stack overflows on JavaScript for long documents. The VXML serializer
+  (`vxml_to_string`), the VXML text-format parser (`string_to_vxml(s)`), the
+  XML/HTML event streamer behind `xml_to_vxml` and `html_to_vxml`, and
+  character-reference, attribute, and comment decoding recursed once per
+  sibling, line, token, or entity, and overflowed Node or browser stacks after
+  a few thousand. They now compile to loops; stack depth follows nesting only,
+  and documents with 200,000 siblings or lines are handled. Results are
+  unchanged: a differential test of 80,000 random trees and XML/HTML strings
+  matched the previous implementation exactly.
 - Fix JSX output to preserve valid named and numeric HTML entities in text and
   quoted attributes, matching HTML output. For example, `&#8288;` now remains
   `&#8288;` rather than becoming `&amp;#8288;` and displaying literally.

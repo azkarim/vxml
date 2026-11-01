@@ -1089,3 +1089,85 @@ pub fn jsx_attributes_preserve_entities_without_exposing_syntax_test() {
     "<p title=\"&nbsp; &#8288; &#x2060; &amp;bad; &amp; &#123;x&#125; &quot;&lt;y&gt;&quot;\" />",
   )
 }
+
+// Stack safety: on JavaScript these functions used one stack frame per
+// sibling, line, comment line, or entity and overflowed Node and browsers on
+// long documents. Each case here overflowed before the loops were made
+// tail-recursive.
+
+const wide = 20_000
+
+fn indices() -> List(Int) {
+  list.repeat(Nil, wide) |> list.index_map(fn(_, i) { i + 1 })
+}
+
+fn wide_tree() -> VXML {
+  V(
+    no_blame(),
+    "root",
+    [],
+    indices()
+      |> list.map(fn(i) {
+        V(no_blame(), "p", [], [
+          T(no_blame(), [Line(no_blame(), "x" <> string.inspect(i))]),
+        ])
+      }),
+  )
+}
+
+fn no_blame() {
+  blame.no_blame
+}
+
+fn child_count(vxml: VXML) -> Int {
+  let assert V(children: children, ..) = vxml
+  list.length(children)
+}
+
+pub fn vxml_serializer_and_parser_handle_wide_trees_test() {
+  let assert Ok(serialized) = vxml.vxml_to_string(wide_tree())
+  let assert Ok(parsed) = vxml.string_to_vxml(serialized, "wide.vxml")
+  child_count(parsed) |> should.equal(wide)
+}
+
+pub fn vxml_parser_handles_long_text_nodes_test() {
+  let lines =
+    indices()
+    |> list.map(fn(i) { Line(no_blame(), "l" <> string.inspect(i)) })
+  let assert Ok(serialized) =
+    vxml.vxml_to_string(V(no_blame(), "root", [], [T(no_blame(), lines)]))
+  let assert Ok(V(children: [T(lines: parsed_lines, ..)], ..)) =
+    vxml.string_to_vxml(serialized, "long.vxml")
+  list.length(parsed_lines) |> should.equal(wide)
+}
+
+pub fn xml_and_html_parsers_handle_wide_trees_test() {
+  let tree = wide_tree()
+  // The parsers keep the whitespace between elements as text nodes, so count
+  // only the element children.
+  let assert Ok(from_xml) = vxml.xml_to_vxml(vxml.vxml_to_xml(tree, 0, 2), "w")
+  element_child_count(from_xml) |> should.equal(wide)
+  let assert Ok(from_html) =
+    vxml.html_to_vxml(vxml.vxml_to_html(tree, 0, 2), "w")
+  element_child_count(from_html) |> should.equal(wide)
+}
+
+fn element_child_count(vxml: VXML) -> Int {
+  let assert V(children: children, ..) = vxml
+  list.count(children, fn(child) {
+    case child {
+      V(..) -> True
+      T(..) -> False
+    }
+  })
+}
+
+pub fn xml_parser_handles_long_comments_and_many_entities_test() {
+  let comment =
+    "<root><!--\n"
+    <> indices() |> list.map(string.inspect) |> string.join("\n")
+    <> "\n--></root>"
+  vxml.xml_to_vxml(comment, "c") |> should.be_ok
+  vxml.xml_to_vxml("<root>" <> string.repeat("&amp;", wide) <> "</root>", "e")
+  |> should.be_ok
+}

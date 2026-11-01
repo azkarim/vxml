@@ -255,6 +255,16 @@ fn take_text_up_to_next_tag_loop(
   }
 }
 
+// What a `stream_*` state function hands back to `event_stream_internal`:
+// the events so far (most recent first), the next state, and the remaining
+// input. Returning it, rather than calling `event_stream_internal` from each
+// state function, keeps the loop self-recursive so Gleam compiles it to a
+// `while` loop on JavaScript; the mutual tail calls used one stack frame per
+// token and overflowed browser stacks on long documents.
+type Step {
+  Step(previous: List(Event), state: State, remaining: FileHead)
+}
+
 fn event_stream_internal(
   previous: List(Event),
   state: State,
@@ -274,14 +284,16 @@ fn event_stream_internal(
                 rest,
               )
           }
-        _ ->
-          case state {
+        _ -> {
+          let Step(previous, state, remaining) = case state {
             OutsideTag -> stream_outside_tag(previous, first, rest)
             InsideComment -> stream_inside_comment(previous, first, rest)
             InsideDoctype(_, _) ->
               stream_inside_doctype(previous, state, first, rest)
             _ -> stream_inside_tag(previous, state, first, rest)
           }
+          event_stream_internal(previous, state, remaining)
+        }
       }
   }
 }
@@ -290,7 +302,7 @@ fn stream_outside_tag(
   previous: List(Event),
   first: ContentLine,
   rest: FileHead,
-) -> List(Event) {
+) -> Step {
   let #(text, tag_or_not, had_unrecognized_less_than) =
     take_text_up_to_next_tag(first.content)
   let previous = case text {
@@ -308,21 +320,14 @@ fn stream_outside_tag(
   case tag_or_not {
     NoTag -> {
       assert text == first.content
-      event_stream_internal(
-        [Newline(end_of_text_blame), ..previous],
-        OutsideTag,
-        rest,
-      )
+      Step([Newline(end_of_text_blame), ..previous], OutsideTag, rest)
     }
     _ -> {
       let #(event, prefix, tag, state) =
         tag_start(tag_or_not, end_of_text_blame)
       let length = string.length(text <> prefix <> tag)
       assert string.length(first.content) >= length
-      event_stream_internal([event, ..previous], state, [
-        advance_line(first, length),
-        ..rest
-      ])
+      Step([event, ..previous], state, [advance_line(first, length), ..rest])
     }
   }
 }
@@ -470,7 +475,7 @@ fn stream_inside_doctype(
   state: State,
   first: ContentLine,
   rest: FileHead,
-) -> List(Event) {
+) -> Step {
   let assert InsideDoctype(internal_subset_depth, quote) = state
   let #(contents, closed, internal_subset_depth, quote, taken) =
     take_doctype_contents(first.content, internal_subset_depth, quote)
@@ -482,13 +487,13 @@ fn stream_inside_doctype(
 
   case closed {
     True ->
-      event_stream_internal(
+      Step(
         [DoctypeEndSequence(bl.advance(first.blame, taken - 1)), ..previous],
         OutsideTag,
         [advance_line(first, taken), ..rest],
       )
     False ->
-      event_stream_internal(
+      Step(
         [
           Newline(bl.advance(first.blame, string.length(first.content))),
           ..previous
@@ -503,10 +508,10 @@ fn stream_inside_comment(
   previous: List(Event),
   first: ContentLine,
   rest: FileHead,
-) -> List(Event) {
+) -> Step {
   case string.split_once(first.content, "-->") {
     Error(Nil) ->
-      event_stream_internal(
+      Step(
         [
           Newline(bl.advance(first.blame, string.length(first.content))),
           CommentContents(first.blame, first.content),
@@ -516,14 +521,13 @@ fn stream_inside_comment(
         rest,
       )
     Ok(#("", _)) ->
-      event_stream_internal(
-        [CommentEndSequence(first.blame), ..previous],
-        OutsideTag,
-        [advance_line(first, 3), ..rest],
-      )
+      Step([CommentEndSequence(first.blame), ..previous], OutsideTag, [
+        advance_line(first, 3),
+        ..rest
+      ])
     Ok(#(before, _)) -> {
       let length = string.length(before)
-      event_stream_internal(
+      Step(
         [
           CommentEndSequence(bl.advance(first.blame, length)),
           CommentContents(first.blame, before),
@@ -541,7 +545,7 @@ fn stream_inside_tag(
   state: State,
   first: ContentLine,
   rest: FileHead,
-) -> List(Event) {
+) -> Step {
   let num_whitespace =
     string.length(first.content)
     - string.length(string.trim_start(first.content))
@@ -549,11 +553,10 @@ fn stream_inside_tag(
   case num_whitespace > 0 {
     True -> {
       let whitespace = string.slice(first.content, 0, num_whitespace)
-      event_stream_internal(
-        [InTagWhitespace(first.blame, whitespace), ..previous],
-        state,
-        [advance_line(first, num_whitespace), ..rest],
-      )
+      Step([InTagWhitespace(first.blame, whitespace), ..previous], state, [
+        advance_line(first, num_whitespace),
+        ..rest
+      ])
     }
     False -> stream_inside_tag_without_whitespace(previous, state, first, rest)
   }
@@ -564,10 +567,10 @@ fn stream_inside_tag_without_whitespace(
   state: State,
   first: ContentLine,
   rest: FileHead,
-) -> List(Event) {
+) -> Step {
   case string.starts_with(first.content, "=") {
     True ->
-      event_stream_internal(
+      Step(
         [Assignment(first.blame), ..previous],
         InsideOpeningTagExpectingNextValue,
         [advance_line(first, 1), ..rest],
@@ -597,7 +600,7 @@ fn stream_quoted_value(
   rest: FileHead,
   quote: String,
   quoted_event: fn(Blame, String) -> Event,
-) -> List(Event) {
+) -> Step {
   let after_opening_quote =
     first.content
     |> string.slice(1, string.length(first.content) - 1)
@@ -612,7 +615,7 @@ fn stream_quoted_value(
       #(ValueMalformed(first.blame, taken), taken)
     }
   }
-  event_stream_internal([event, ..previous], InsideOpeningTagExpectingNextKey, [
+  Step([event, ..previous], InsideOpeningTagExpectingNextKey, [
     advance_line(first, string.length(taken)),
     ..rest
   ])
@@ -622,13 +625,13 @@ fn stream_unquoted_value(
   previous: List(Event),
   first: ContentLine,
   rest: FileHead,
-) -> List(Event) {
+) -> Step {
   let splitter = sp.new([" ", "\t", "\r", "\n", "\u{000C}", "/>", "?>", ">"])
   let #(value, _, _) = sp.split(splitter, first.content)
   case value {
     "" -> stream_key_or_tag_end(previous, first, rest)
     _ -> {
-      event_stream_internal(
+      Step(
         [ValueUnquoted(first.blame, value), ..previous],
         InsideOpeningTagExpectingNextKey,
         [advance_line(first, string.length(value)), ..rest],
@@ -641,7 +644,7 @@ fn stream_key_or_tag_end(
   previous: List(Event),
   first: ContentLine,
   rest: FileHead,
-) -> List(Event) {
+) -> Step {
   let splitter = sp.new(["=", " ", "/>", "?>", ">"])
   let #(before, delimiter, _) = sp.split(splitter, first.content)
   case before {
@@ -651,11 +654,10 @@ fn stream_key_or_tag_end(
         True -> Key(first.blame, before)
         False -> KeyMalformed(first.blame, before)
       }
-      event_stream_internal(
-        [event, ..previous],
-        InsideOpeningTagExpectingNextAssignment,
-        [advance_line(first, string.length(before)), ..rest],
-      )
+      Step([event, ..previous], InsideOpeningTagExpectingNextAssignment, [
+        advance_line(first, string.length(before)),
+        ..rest
+      ])
     }
   }
 }
@@ -665,17 +667,14 @@ fn stream_tag_end(
   first: ContentLine,
   rest: FileHead,
   delimiter: String,
-) -> List(Event) {
+) -> Step {
   let #(event, length) = case delimiter {
     "/>" -> #(TagEndSelfClosing(first.blame), 2)
     "?>" -> #(TagEndXMLVersion(first.blame), 2)
     ">" -> #(TagEndOrdinary(first.blame), 1)
     _ -> panic as "unexpected tag ending delimiter"
   }
-  event_stream_internal([event, ..previous], OutsideTag, [
-    advance_line(first, length),
-    ..rest
-  ])
+  Step([event, ..previous], OutsideTag, [advance_line(first, length), ..rest])
 }
 
 fn input_lines_to_content_lines(lines: List(InputLine)) -> List(ContentLine) {

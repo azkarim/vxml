@@ -292,164 +292,202 @@ fn reject_tab_indentation(
   }
 }
 
-fn parse_text_lines_at_indent(
+// The three parsing loops below are self-recursive in tail position, with
+// results accumulated in reverse, so that Gleam compiles them to loops on
+// JavaScript. Only element children recurse, bounding stack depth by the
+// document's nesting rather than by its length; browsers overflow after a few
+// thousand frames.
+
+type LineStep(a) {
+  // A blank line, consumed and ignored.
+  SkipLine
+  // A line of lower indentation, which ends the current run unconsumed.
+  StopBeforeLine
+  TakeLine(a)
+  FailLine(VXMLParseError)
+}
+
+// The checks every serialized-VXML line goes through before its kind is known.
+fn line_step(
   indent: Int,
-  head: List(InputLine),
-) -> Result(#(List(Line), List(InputLine)), VXMLParseError) {
-  // no lines left
-  use InputLine(blame, suffix_indent, suffix), rest <- on.empty_nonempty(
-    head,
-    fn() { Ok(#([], head)) },
-  )
+  blame: Blame,
+  suffix_indent: Int,
+  suffix: String,
+  then: fn() -> LineStep(a),
+) -> LineStep(a) {
+  use <- on.true_false(suffix == "", fn() { SkipLine })
+  case reject_tab_indentation(blame, suffix) {
+    Error(e) -> FailLine(e)
+    Ok(Nil) -> {
+      use <- on.true_false(suffix_indent > indent, fn() {
+        FailLine(UnexpectedIndentation(blame, indent, suffix_indent, suffix))
+      })
+      use <- on.true_false(suffix_indent < indent, fn() { StopBeforeLine })
+      then()
+    }
+  }
+}
 
-  // empty suffix
-  use <- on.true_false(suffix == "", fn() {
-    parse_text_lines_at_indent(indent, rest)
-  })
-
-  use _ <- result.try(reject_tab_indentation(blame, suffix))
-
-  // indent too large
-  use <- on.true_false(suffix_indent > indent, fn() {
-    Error(UnexpectedIndentation(blame, indent, suffix_indent, suffix))
-  })
-
-  // indent too small
-  use <- on.true_false(suffix_indent < indent, fn() { Ok(#([], head)) })
+fn text_line_step(
+  indent: Int,
+  blame: Blame,
+  suffix_indent: Int,
+  suffix: String,
+) -> LineStep(Line) {
+  use <- line_step(indent, blame, suffix_indent, suffix)
 
   let suffix = string.trim_end(suffix)
 
   // missing opening quote
   use <- on.false_true(suffix |> string.starts_with(vxml_line_delimiter), fn() {
-    Error(TextLineOpeningQuoteMissing(blame, suffix))
+    FailLine(TextLineOpeningQuoteMissing(blame, suffix))
   })
 
   let content = suffix |> string.drop_start(1)
 
   // missing closing quote
   use <- on.false_true(content |> string.ends_with(vxml_line_delimiter), fn() {
-    Error(TextLineClosingQuoteMissing(blame, suffix))
+    FailLine(TextLineClosingQuoteMissing(blame, suffix))
   })
 
-  let content = content |> string.drop_end(1)
-  let line = Line(blame, content)
-  use #(lines, after) <- on.ok(parse_text_lines_at_indent(indent, rest))
-  Ok(#([line, ..lines], after))
+  TakeLine(Line(blame, content |> string.drop_end(1)))
+}
+
+fn attribute_line_step(
+  indent: Int,
+  blame: Blame,
+  suffix_indent: Int,
+  suffix: String,
+) -> LineStep(Attr) {
+  use <- line_step(indent, blame, suffix_indent, suffix)
+
+  // tag
+  use <- on.true_false(suffix |> string.starts_with("<>"), fn() {
+    StopBeforeLine
+  })
+
+  // missing '='
+  use #(key, val) <- on.error_ok(suffix |> string.split_once("="), fn(_) {
+    FailLine(AttributeAssignmentMissing(blame, suffix))
+  })
+
+  // bad key
+  use _ <- on.error_ok(validate_key(key), fn(e) {
+    FailLine(BadAttributeKey(blame, e))
+  })
+
+  // bad value
+  use val <- on.error_ok(validate_value(val), fn(e) {
+    FailLine(BadAttributeValue(blame, e))
+  })
+
+  TakeLine(Attr(blame, key, val))
+}
+
+// A node line yields its tag, which is "" for a text node.
+fn node_line_step(
+  indent: Int,
+  blame: Blame,
+  suffix_indent: Int,
+  suffix: String,
+) -> LineStep(String) {
+  use <- line_step(indent, blame, suffix_indent, suffix)
+
+  // not a tag
+  use <- on.false_true(suffix |> string.starts_with("<>"), fn() {
+    FailLine(NodeMarkerMissing(blame, suffix))
+  })
+
+  TakeLine(suffix |> string.drop_start(2) |> string.trim)
+}
+
+fn parse_text_lines_at_indent(
+  indent: Int,
+  head: List(InputLine),
+  acc: List(Line),
+) -> Result(#(List(Line), List(InputLine)), VXMLParseError) {
+  case head {
+    [] -> Ok(#(list.reverse(acc), head))
+    [InputLine(blame, suffix_indent, suffix), ..rest] ->
+      case text_line_step(indent, blame, suffix_indent, suffix) {
+        SkipLine -> parse_text_lines_at_indent(indent, rest, acc)
+        StopBeforeLine -> Ok(#(list.reverse(acc), head))
+        TakeLine(line) ->
+          parse_text_lines_at_indent(indent, rest, [line, ..acc])
+        FailLine(e) -> Error(e)
+      }
+  }
 }
 
 fn parse_attributes_at_indent(
   indent: Int,
   head: List(InputLine),
+  acc: List(Attr),
 ) -> Result(#(List(Attr), List(InputLine)), VXMLParseError) {
-  // no lines left
-  use InputLine(blame, suffix_indent, suffix), rest <- on.empty_nonempty(
-    head,
-    fn() { Ok(#([], head)) },
-  )
-
-  // empty suffix
-  use <- on.true_false(suffix == "", fn() {
-    parse_attributes_at_indent(indent, rest)
-  })
-
-  use _ <- result.try(reject_tab_indentation(blame, suffix))
-
-  // indent too large
-  use <- on.true_false(suffix_indent > indent, fn() {
-    Error(UnexpectedIndentation(blame, indent, suffix_indent, suffix))
-  })
-
-  // indent too small
-  use <- on.true_false(suffix_indent < indent, fn() { Ok(#([], head)) })
-
-  // tag
-  use <- on.true_false(suffix |> string.starts_with("<>"), fn() {
-    Ok(#([], head))
-  })
-
-  // missing '='
-  use #(key, val) <- on.error_ok(suffix |> string.split_once("="), fn(_) {
-    Error(AttributeAssignmentMissing(blame, suffix))
-  })
-
-  // bad key
-  use _ <- on.error_ok(validate_key(key), fn(e) {
-    Error(BadAttributeKey(blame, e))
-  })
-
-  // bad value
-  use val <- on.error_ok(validate_value(val), fn(e) {
-    Error(BadAttributeValue(blame, e))
-  })
-
-  let attr = Attr(blame, key, val)
-  use #(attrs, after) <- on.ok(parse_attributes_at_indent(indent, rest))
-  let attrs = [attr, ..attrs]
-  Ok(#(attrs, after))
+  case head {
+    [] -> Ok(#(list.reverse(acc), head))
+    [InputLine(blame, suffix_indent, suffix), ..rest] ->
+      case attribute_line_step(indent, blame, suffix_indent, suffix) {
+        SkipLine -> parse_attributes_at_indent(indent, rest, acc)
+        StopBeforeLine -> Ok(#(list.reverse(acc), head))
+        TakeLine(attr) ->
+          parse_attributes_at_indent(indent, rest, [attr, ..acc])
+        FailLine(e) -> Error(e)
+      }
+  }
 }
 
 fn parse_nodes_at_indent(
   indent: Int,
   head: List(InputLine),
+  acc: List(VXML),
 ) -> Result(#(List(VXML), List(InputLine)), VXMLParseError) {
-  // no lines left
-  use InputLine(blame, suffix_indent, suffix), rest <- on.empty_nonempty(
-    head,
-    fn() { Ok(#([], head)) },
-  )
+  case head {
+    [] -> Ok(#(list.reverse(acc), head))
+    [InputLine(blame, suffix_indent, suffix), ..rest] ->
+      case node_line_step(indent, blame, suffix_indent, suffix) {
+        SkipLine -> parse_nodes_at_indent(indent, rest, acc)
+        StopBeforeLine -> Ok(#(list.reverse(acc), head))
+        FailLine(e) -> Error(e)
+        TakeLine(tag) ->
+          case parse_node(indent, blame, tag, rest) {
+            Error(e) -> Error(e)
+            Ok(#(node, after)) ->
+              parse_nodes_at_indent(indent, after, [node, ..acc])
+          }
+      }
+  }
+}
 
-  // empty suffix
-  use <- on.true_false(suffix == "", fn() {
-    parse_nodes_at_indent(indent, rest)
-  })
-
-  use _ <- result.try(reject_tab_indentation(blame, suffix))
-
-  // indent too large
-  use <- on.true_false(suffix_indent > indent, fn() {
-    Error(UnexpectedIndentation(blame, indent, suffix_indent, suffix))
-  })
-
-  // indent too small
-  use <- on.true_false(suffix_indent < indent, fn() { Ok(#([], head)) })
-
-  // not a tag
-  use <- on.false_true(suffix |> string.starts_with("<>"), fn() {
-    Error(NodeMarkerMissing(blame, suffix))
-  })
-
-  let tag = suffix |> string.drop_start(2) |> string.trim
-
+// Parses the body of one node whose marker line has been consumed. This is
+// the parser's only non-tail recursion, so stack depth follows nesting.
+fn parse_node(
+  indent: Int,
+  blame: Blame,
+  tag: String,
+  rest: List(InputLine),
+) -> Result(#(VXML, List(InputLine)), VXMLParseError) {
   case tag {
     // text node
     "" -> {
-      use #(lines, after) <- on.ok(parse_text_lines_at_indent(
-        indent + vxml_indent,
-        rest,
-      ))
+      use #(lines, after) <- on.ok(
+        parse_text_lines_at_indent(indent + vxml_indent, rest, []),
+      )
       case lines {
         [] -> Error(TextNodeLinesMissing(blame))
-        _ -> {
-          let node = T(blame, lines)
-          use #(nodes, after) <- on.ok(parse_nodes_at_indent(indent, after))
-          Ok(#([node, ..nodes], after))
-        }
+        _ -> Ok(#(T(blame, lines), after))
       }
     }
     // tag
     _ -> {
       use _ <- on.error_ok(validate_tag(tag), fn(e) { Error(BadTag(blame, e)) })
-      use #(attrs, after) <- on.ok(parse_attributes_at_indent(
-        indent + vxml_indent,
-        rest,
-      ))
-      use #(children, after) <- on.ok(parse_nodes_at_indent(
-        indent + vxml_indent,
-        after,
-      ))
-      let node = V(blame |> bl.set_anchored, tag, attrs, children)
-      use #(nodes, after) <- on.ok(parse_nodes_at_indent(indent, after))
-      Ok(#([node, ..nodes], after))
+      use #(attrs, after) <- on.ok(
+        parse_attributes_at_indent(indent + vxml_indent, rest, []),
+      )
+      use #(children, after) <- on.ok(
+        parse_nodes_at_indent(indent + vxml_indent, after, []),
+      )
+      Ok(#(V(blame |> bl.set_anchored, tag, attrs, children), after))
     }
   }
 }
@@ -771,16 +809,17 @@ fn serialize_vxmls(
   indentation: Int,
   partial_reversed: List(OutputLine),
 ) -> Result(List(OutputLine), VXMLSerializationError) {
+  // A `case`, not `use <- result.try`, keeps the recursive call in tail
+  // position so it compiles to a loop on JavaScript (one frame per sibling
+  // otherwise overflows browser stacks).
   case vxmls {
     [] -> Ok(partial_reversed)
-    [vxml, ..rest] -> {
-      use partial_reversed <- result.try(vxml_to_output_lines_internal(
-        vxml,
-        indentation,
-        partial_reversed,
-      ))
-      serialize_vxmls(rest, indentation, partial_reversed)
-    }
+    [vxml, ..rest] ->
+      case vxml_to_output_lines_internal(vxml, indentation, partial_reversed) {
+        Error(e) -> Error(e)
+        Ok(partial_reversed) ->
+          serialize_vxmls(rest, indentation, partial_reversed)
+      }
   }
 }
 
@@ -890,7 +929,7 @@ pub fn vxml_table(
 pub fn input_lines_to_vxmls(
   lines: List(io_l.InputLine),
 ) -> Result(List(VXML), VXMLParseError) {
-  use #(vxmls, after) <- on.ok(parse_nodes_at_indent(0, lines))
+  use #(vxmls, after) <- on.ok(parse_nodes_at_indent(0, lines, []))
   assert after == []
   Ok(vxmls)
 }
@@ -1870,12 +1909,20 @@ fn decode_xml_character_references_loop(
     ["&", ..rest] -> {
       let #(entity_graphemes, rest, closed) =
         take_until_semicolon(rest, [], False)
-      use entity <- on.ok(case closed {
-        True -> entity_graphemes |> list.reverse |> string.concat |> Ok
+      let decoded = case closed {
+        True ->
+          entity_graphemes
+          |> list.reverse
+          |> string.concat
+          |> decode_xml_character_reference
         False -> Error("unterminated XML character reference")
-      })
-      use decoded <- on.ok(decode_xml_character_reference(entity))
-      decode_xml_character_references_loop(rest, [decoded, ..previous])
+      }
+      // A `case`, not `use`, keeps the recursion a loop on JavaScript.
+      case decoded {
+        Error(e) -> Error(e)
+        Ok(decoded) ->
+          decode_xml_character_references_loop(rest, [decoded, ..previous])
+      }
     }
     [first, ..rest] ->
       decode_xml_character_references_loop(rest, [first, ..previous])
@@ -2133,18 +2180,20 @@ fn get_attrs_and_tag_end(
 fn reach_end_of_comments(
   comment_start: xs.Event,
   rest: List(xs.Event),
+  previous: List(xs.Event),
 ) -> Result(#(List(xs.Event), List(xs.Event)), #(Blame, String)) {
+  // `previous` holds the comment contents so far, most recent first, so the
+  // recursion is a loop on JavaScript.
   case rest {
     [xs.CommentEndSequence(_), ..rest] -> {
-      Ok(#([], rest))
+      Ok(#(list.reverse(previous), rest))
     }
     [xs.CommentContents(_, _) as first, ..rest] -> {
-      use #(before, after) <- on.ok(reach_end_of_comments(comment_start, rest))
-      Ok(#([first, ..before], after))
+      reach_end_of_comments(comment_start, rest, [first, ..previous])
     }
     [xs.Newline(_), ..rest] -> {
       // just ignore it:
-      reach_end_of_comments(comment_start, rest)
+      reach_end_of_comments(comment_start, rest, previous)
     }
     [] -> {
       Error(#(comment_start.blame, "unclosed comment"))
@@ -2185,12 +2234,14 @@ fn decode_attrs(
   mode: CharacterReferenceMode,
   previous: List(Attr),
 ) -> Result(List(Attr), #(Blame, String)) {
+  // A `case`, not `use`, keeps the recursion a loop on JavaScript.
   case attrs {
     [] -> previous |> list.reverse |> Ok
-    [first, ..rest] -> {
-      use attr <- on.ok(decode_attr_val(first, mode))
-      decode_attrs(rest, mode, [attr, ..previous])
-    }
+    [first, ..rest] ->
+      case decode_attr_val(first, mode) {
+        Error(e) -> Error(e)
+        Ok(attr) -> decode_attrs(rest, mode, [attr, ..previous])
+      }
   }
 }
 
@@ -2199,12 +2250,15 @@ fn decode_lines(
   mode: CharacterReferenceMode,
   previous: List(Line),
 ) -> Result(List(Line), #(Blame, String)) {
+  // A `case`, not `use <- on.ok`, keeps the recursion in tail position so it
+  // compiles to a loop on JavaScript.
   case lines {
     [] -> previous |> list.reverse |> Ok
-    [first, ..rest] -> {
-      use line <- on.ok(decode_line(first, mode))
-      decode_lines(rest, mode, [line, ..previous])
-    }
+    [first, ..rest] ->
+      case decode_line(first, mode) {
+        Error(e) -> Error(e)
+        Ok(line) -> decode_lines(rest, mode, [line, ..previous])
+      }
   }
 }
 
@@ -2313,7 +2367,7 @@ fn xml_streaming_get_next_logical_unit(
 
     // construction of XMLS
     xs.CommentStartSequence(_) -> {
-      use #(events, remaining) <- on.ok(reach_end_of_comments(first, rest))
+      use #(events, remaining) <- on.ok(reach_end_of_comments(first, rest, []))
       let lines =
         list.map(events, fn(e) {
           let assert xs.CommentContents(b, l) = e
