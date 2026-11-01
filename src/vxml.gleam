@@ -12,11 +12,10 @@ import gleam/option.{type Option, None, Some}
 import gleam/regexp
 import gleam/result
 import gleam/string.{inspect as ins}
-import glentities/decoder as html_entities
 import glentities/named_encoder as html_named_entities
 import on
-import simplifile
 import vxml/blame.{type Blame, prepend_comment as pc} as bl
+import vxml/internal/html_entities
 import vxml/internal/html_repair
 import vxml/internal/xml_name
 import vxml/io_lines.{type InputLine, type OutputLine, InputLine, OutputLine} as io_l
@@ -108,14 +107,6 @@ pub type VXMLParseError {
   NodeMarkerMissing(blame: Blame, line: String)
   /// A singular parser received a number of roots other than one.
   ExpectedOneRoot(actual: Int)
-}
-
-/// An I/O or document error encountered while parsing a VXML file.
-pub type VXMLParsePathError {
-  /// Reading the path failed.
-  IOError(simplifile.FileError)
-  /// The file was read but its contents were not valid serialized VXML.
-  DocumentError(VXMLParseError)
 }
 
 /// An error encountered while parsing XML-like input.
@@ -947,35 +938,6 @@ pub fn string_to_vxml(
   source
   |> io_l.string_to_input_lines(filename, 0)
   |> input_lines_to_vxml
-}
-
-// ************************************************************
-// Path -> VXML
-// ************************************************************
-
-/// Parses a path containing zero or more VXML roots.
-///
-/// Returns `IOError` when reading fails and `DocumentError` when parsing fails.
-pub fn path_to_vxmls(path: String) -> Result(List(VXML), VXMLParsePathError) {
-  use contents <- on.error_ok(simplifile.read(path), fn(io_error) {
-    Error(IOError(io_error))
-  })
-
-  string_to_vxmls(contents, path)
-  |> result.map_error(fn(e) { DocumentError(e) })
-}
-
-/// Parses a path containing exactly one VXML root.
-///
-/// Returns `IOError` when reading fails and `DocumentError` when parsing fails.
-/// A root count other than one is a `DocumentError(ExpectedOneRoot(..))`.
-pub fn path_to_vxml(path: String) -> Result(VXML, VXMLParsePathError) {
-  use contents <- on.error_ok(simplifile.read(path), fn(io_error) {
-    Error(IOError(io_error))
-  })
-
-  string_to_vxml(contents, path)
-  |> result.map_error(fn(e) { DocumentError(e) })
 }
 
 fn jsx_text_escape(content: String) -> String {

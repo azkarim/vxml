@@ -73,6 +73,12 @@ This package includes:
   palatable to XML-oriented parsers
 - serializers for HTML-, XML-, and JSX-like output, as well as VXML itself
 
+The package performs no file or other host I/O: every parser takes a `String`
+or `List(InputLine)` and every serializer returns one. It therefore runs on
+both the Erlang and JavaScript targets, including in the browser. The examples
+below use [simplifile](https://hex.pm/packages/simplifile) to read files; it is
+not a dependency of this package.
+
 ## Model
 
 Low-level payloads are:
@@ -176,11 +182,19 @@ root and input that may contain any number of roots:
 |---|---|---|
 | `List(InputLine)` | `input_lines_to_vxml` | `input_lines_to_vxmls` |
 | `String` | `string_to_vxml` | `string_to_vxmls` |
-| filesystem path | `path_to_vxml` | `path_to_vxmls` |
 
 The singular functions return `VXML` and reject empty or multiple-root input.
 The plural functions return `List(VXML)`. String parsing accepts a second
-argument used as the source path in generated `Blame` values.
+argument used as the source path in generated `Blame` values. To parse a file,
+read it yourself and pass its contents and path:
+
+```gleam
+simplifile.read(path)
+|> result.map_error(string.inspect)
+|> result.try(fn(contents) {
+  vxml.string_to_vxml(contents, path) |> result.map_error(string.inspect)
+})
+```
 
 ## Validation
 

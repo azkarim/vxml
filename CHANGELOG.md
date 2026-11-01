@@ -6,8 +6,26 @@ the published Hex archives. Some tags precede their matching `gleam.toml` versio
 bump. In particular, the `v2.0.0` tag points to `06ee23f`; the 2.0.0 entry below
 also includes the subsequent release commits `0036585` and `34dd8c6`.
 
-## 2.0.1 — Unreleased
+## 3.0.0 — Unreleased
 
+- **Breaking:** Remove all file access so the package is target- and
+  host-agnostic, and usable from the browser on the JavaScript target.
+  `simplifile` is no longer a dependency, and no generated JavaScript module
+  imports a `node:*` module.
+- **Breaking:** Remove `path_to_vxml`, `path_to_vxmls`, and the
+  `VXMLParsePathError` type (`IOError`, `DocumentError`). Read the file
+  yourself and call `string_to_vxml(contents, path)` or
+  `string_to_vxmls(contents, path)`, which return `VXMLParseError` directly.
+- **Breaking:** Remove `io_lines.path_to_input_lines` and its alias
+  `io_lines.read`. Use `io_lines.string_to_input_lines(contents, path,
+  added_indentation)`.
+- Fix loading in browsers: replace the `glentities/decoder` import with an
+  internal, generated `vxml/internal/html_entities` module. glentities' named
+  entity `case` compiles to a ~2,100-branch JavaScript `else if` chain that
+  browser parsers reject with "Maximum call stack size exceeded", which broke
+  every module importing `vxml`. The new module returns identical results for
+  all 2,125 named entities and for numeric references
+  (`scripts/generate_html_entities.py` regenerates it).
 - Fix JSX output to preserve valid named and numeric HTML entities in text and
   quoted attributes, matching HTML output. For example, `&#8288;` now remains
   `&#8288;` rather than becoming `&amp;#8288;` and displaying literally.
@@ -18,7 +36,8 @@ also includes the subsequent release commits `0036585` and `34dd8c6`.
 
 **Compatibility:** To display the literal text `&nbsp;` in JSX, supply
 `&amp;nbsp;`. Previously, supplying `&nbsp;` displayed it literally; it now
-produces a nonbreaking space. Public function signatures are unchanged.
+produces a nonbreaking space. The JSX fix itself changes no public function
+signatures.
 
 ## 2.0.0
 

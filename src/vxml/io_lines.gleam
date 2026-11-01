@@ -2,16 +2,15 @@
 ////
 //// `InputLine` and `OutputLine` store leading indentation separately from the
 //// remaining line suffix and attach `Blame` to both. They provide the bridge
-//// between files or strings and VXML parsers or serializers.
+//// between source strings and VXML parsers or serializers. Reading and
+//// writing files is left to the caller, so the module runs on any target.
 ////
 //// String conversion normalizes CRLF and CR endings to LF, converts leading
 //// ASCII spaces into an indentation count, preserves all other whitespace,
 //// and represents a terminal newline as a final empty line.
 
 import gleam/list
-import gleam/result
 import gleam/string
-import simplifile.{type FileError}
 import vxml/blame.{type Blame} as bl
 
 @external(erlang, "vxml_io_lines_ffi", "split_leading_spaces")
@@ -44,7 +43,7 @@ pub fn normalize_line_endings(source: String) -> String {
 }
 
 // ***************************************************
-// String -> List(InputLine) & path -> List(InputLine)
+// String -> List(InputLine)
 // ***************************************************
 
 /// Converts a string to input lines, preserving its path and trailing content.
@@ -75,23 +74,6 @@ pub fn string_to_input_lines(
       suffix: suffix,
     )
   })
-}
-
-/// Reads a file path into input lines.
-pub fn path_to_input_lines(
-  path: String,
-  added_indentation: Int,
-) -> Result(List(InputLine), FileError) {
-  simplifile.read(path)
-  |> result.map(string_to_input_lines(_, path, added_indentation))
-}
-
-/// Alias for `path_to_input_lines`.
-pub fn read(
-  path: String,
-  added_indentation: Int,
-) -> Result(List(InputLine), FileError) {
-  path_to_input_lines(path, added_indentation)
 }
 
 // **************************************************

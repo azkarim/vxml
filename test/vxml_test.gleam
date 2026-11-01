@@ -6,6 +6,7 @@ import glentities/decoder as entity_decoder
 import simplifile
 import vxml.{type Attr, type VXML, Attr, Line, T, V}
 import vxml/blame.{Anchored, Movable, Src}
+import vxml/internal/html_entities
 import vxml/io_lines
 import vxml/xml_streamer
 import xmlm
@@ -710,6 +711,26 @@ pub fn glentities_decoder_preserves_unknown_entities_test() {
   |> should.equal("fish&chips;")
 }
 
+// vxml/internal/html_entities replaces glentities/decoder, whose compiled
+// JavaScript is too deeply nested for browsers to parse.
+pub fn internal_html_entities_match_glentities_decoder_test() {
+  ["AElig", "amp", "AMP", "Gamma", "nbsp", "zwnj", "quot", "bsol", "fish", ""]
+  |> list.each(fn(name) {
+    html_entities.decode_named(name)
+    |> should.equal(entity_decoder.decode_named(name))
+  })
+  ["394", "1F600", "110000", "zz", ""]
+  |> list.each(fn(hex) {
+    html_entities.decode_hex(hex)
+    |> should.equal(entity_decoder.decode_hex(hex))
+  })
+  ["916", "128512", "1114112", "x", ""]
+  |> list.each(fn(dec) {
+    html_entities.decode_dec(dec)
+    |> should.equal(entity_decoder.decode_dec(dec))
+  })
+}
+
 pub fn xml_parser_accepts_empty_comment_test() {
   "<root><!----><child/></root>"
   |> vxml.xml_to_vxml("sample.xml")
@@ -800,7 +821,8 @@ pub fn xml_output_escapes_attribute_whitespace_test() {
 }
 
 pub fn sample_vxml_file_parses_test() {
-  let assert Ok(vxmls) = vxml.path_to_vxmls("samples/sample.vxml")
+  let assert Ok(content) = simplifile.read("samples/sample.vxml")
+  let assert Ok(vxmls) = vxml.string_to_vxmls(content, "samples/sample.vxml")
 
   vxmls
   |> list.length

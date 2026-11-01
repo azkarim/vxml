@@ -9,7 +9,7 @@ import gleam/list
 import gleam/option.{Some}
 import gleam/regexp
 import gleam/string
-import glentities/decoder as html_entities
+import vxml/internal/html_entities
 
 // Best-effort string repair. This is not quote-aware or token-aware.
 fn html_repair_close_void_tag(content: String, tag: String) -> String {
