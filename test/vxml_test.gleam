@@ -3,6 +3,7 @@ import gleam/string
 import gleeunit
 import gleeunit/should
 import glentities/decoder as entity_decoder
+import glentities/named_encoder as entity_encoder
 import simplifile
 import vxml.{type Attr, type VXML, Attr, Line, T, V}
 import vxml/blame.{Anchored, Movable, Src}
@@ -729,6 +730,51 @@ pub fn internal_html_entities_match_glentities_decoder_test() {
     html_entities.decode_dec(dec)
     |> should.equal(entity_decoder.decode_dec(dec))
   })
+}
+
+// vxml/internal/html_entities also replaces glentities/named_encoder, for the
+// same reason; Bun's bundler crashes on it.
+pub fn internal_html_entities_match_glentities_named_encoder_test() {
+  let multi_codepoint_keys = [
+    "fj", "⫽\u{20E5}", "⫌\u{FE00}", "⫋\u{FE00}", "⫆\u{338}", "⫅\u{338}",
+    "⪰\u{338}", "⪯\u{338}", "⪭\u{FE00}", "⪬\u{FE00}", "⪢\u{338}", "⪡\u{338}",
+    "⩾\u{338}", "⩽\u{338}", "⩰\u{338}", "⩭\u{338}", "⧐\u{338}", "⧏\u{338}",
+    "⤳\u{338}", "⋹\u{338}", "⋵\u{338}", "⋛\u{FE00}", "⋚\u{FE00}", "⋙\u{338}",
+    "⋘\u{338}", "⊵\u{20D2}", "⊴\u{20D2}", "⊔\u{FE00}", "⊓\u{FE00}", "⊐\u{338}",
+    "⊏\u{338}", "⊋\u{FE00}", "⊊\u{FE00}", "⊃\u{20D2}", "⊂\u{20D2}", "≿\u{338}",
+    "≫\u{338}", "≫\u{20D2}", "≪\u{338}", "≪\u{20D2}", "≩\u{FE00}", "≨\u{FE00}",
+    "≧\u{338}", "≦\u{338}", "≥\u{20D2}", "≤\u{20D2}", "≡\u{20E5}", "≐\u{338}",
+    "≏\u{338}", "≎\u{338}", "≍\u{20D2}", "≋\u{338}", "≂\u{338}", "∾\u{333}",
+    "∽\u{331}", "∼\u{20D2}", "∪\u{FE00}", "∩\u{FE00}", "∠\u{20D2}", ">\u{20D2}",
+    "=\u{20E5}", "<\u{20D2}", "∂\u{338}", "↝\u{338}", "\u{205F}\u{200A}",
+  ]
+  let mixed = [
+    "", "a&b<c>\"d\"\\", "line\n\ttab", "e\u{301}", "Жэ日本😀", "x≂\u{338}y",
+    "\u{205F}\u{205F}\u{200A}", "fjfj", "f j",
+  ]
+  list.append(multi_codepoint_keys, mixed)
+  |> list.each(fn(text) {
+    html_entities.encode_named(text)
+    |> should.equal(entity_encoder.encode(text))
+  })
+  every_codepoint_encodes_like_glentities(0)
+}
+
+fn every_codepoint_encodes_like_glentities(codepoint: Int) -> Nil {
+  case codepoint > 0x1FFFF {
+    True -> Nil
+    False -> {
+      case string.utf_codepoint(codepoint) {
+        Ok(utf_codepoint) -> {
+          let text = string.from_utf_codepoints([utf_codepoint])
+          html_entities.encode_named(text)
+          |> should.equal(entity_encoder.encode(text))
+        }
+        Error(Nil) -> Nil
+      }
+      every_codepoint_encodes_like_glentities(codepoint + 1)
+    }
+  }
 }
 
 pub fn xml_parser_accepts_empty_comment_test() {

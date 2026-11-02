@@ -26,6 +26,12 @@ also includes the subsequent release commits `0036585` and `34dd8c6`.
   every module importing `vxml`. The new module returns identical results for
   all 2,125 named entities and for numeric references
   (`scripts/generate_html_entities.py` regenerates it).
+- Fix bundling with Bun: `unicode_to_named_html_entities` now uses an encoder
+  generated into the same module instead of `glentities/named_encoder`, whose
+  ~1,500-branch `else if` chain crashes Bun 1.2's bundler (the one Lustre's
+  dev tools use). Results are identical for every code point up to U+1FFFF and
+  for all 65 multi-code-point entities. `glentities` is now a dev dependency
+  only, used by the tests and the generator.
 - Fix stack overflows on JavaScript for long documents. The VXML serializer
   (`vxml_to_string`), the VXML text-format parser (`string_to_vxml(s)`), the
   XML/HTML event streamer behind `xml_to_vxml` and `html_to_vxml`, and

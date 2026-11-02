@@ -12,7 +12,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/regexp
 import gleam/result
 import gleam/string.{inspect as ins}
-import glentities/named_encoder as html_named_entities
 import on
 import vxml/blame.{type Blame, prepend_comment as pc} as bl
 import vxml/internal/html_entities
@@ -647,7 +646,7 @@ fn unicode_to_named_html_entities_string_loop(
     [first, ..rest] -> {
       let replacement = case list.contains(except_characters, first) {
         True -> first
-        False -> html_named_entities.encode(first)
+        False -> html_entities.encode_named(first)
       }
       unicode_to_named_html_entities_string_loop(rest, except_characters, [
         replacement,
